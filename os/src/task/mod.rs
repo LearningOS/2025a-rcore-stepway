@@ -19,6 +19,7 @@ use crate::loader::{get_num_app, init_app_cx};
 use crate::sync::UPSafeCell;
 use lazy_static::*;
 use switch::__switch;
+use crate::syscall::{SYSCALL_EXIT, SYSCALL_GET_TIME, SYSCALL_TRACE, SYSCALL_WRITE, SYSCALL_YIELD};
 pub use task::{TaskControlBlock, TaskStatus};
 
 pub use context::TaskContext;
@@ -45,6 +46,8 @@ pub struct TaskManagerInner {
     tasks: [TaskControlBlock; MAX_APP_NUM],
     /// id of current `Running` task
     current_task: usize,
+    /// strace count for each task
+    strace_count: [[isize; 8]; MAX_APP_NUM],
 }
 
 lazy_static! {
@@ -65,6 +68,7 @@ lazy_static! {
                 UPSafeCell::new(TaskManagerInner {
                     tasks,
                     current_task: 0,
+                    strace_count: [[0; 8]; MAX_APP_NUM],
                 })
             },
         }
@@ -88,6 +92,29 @@ impl TaskManager {
             __switch(&mut _unused as *mut TaskContext, next_task_cx_ptr);
         }
         panic!("unreachable in run_first_task!");
+    }
+
+    fn add_current_strace_count(&self, syscall_id: usize) {
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        inner.strace_count[current][self.get_syscall_id_index(syscall_id)] += 1;
+    }
+
+    fn get_syscall_id_index(&self, syscall_id: usize) -> usize {
+        match syscall_id {
+            SYSCALL_WRITE => 0,
+            SYSCALL_EXIT => 1,
+            SYSCALL_YIELD => 2,
+            SYSCALL_GET_TIME => 3,
+            SYSCALL_TRACE => 4,
+            _ => panic!("Unsupported syscall_id: {}", syscall_id),
+        }
+    }
+
+    fn get_current_strace_count(&self, syscall_id: usize) -> isize {
+        let inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        inner.strace_count[current][self.get_syscall_id_index(syscall_id)]
     }
 
     /// Change the status of current `Running` task into `Ready`.
@@ -140,6 +167,16 @@ impl TaskManager {
 /// Run the first task in task list.
 pub fn run_first_task() {
     TASK_MANAGER.run_first_task();
+}
+
+/// Add 1 to strace count of current `Running` task by syscall_id.
+pub fn add_current_strace_count(syscall_id: usize) {
+    TASK_MANAGER.add_current_strace_count(syscall_id);
+}
+
+/// Get strace count of current `Running` task by syscall_id.
+pub fn get_current_strace_count(syscall_id: usize) -> isize {
+    TASK_MANAGER.get_current_strace_count(syscall_id)
 }
 
 /// Switch current `Running` task to the task we have found,
